@@ -132,7 +132,7 @@
             [ "POS_FEAR", -6 ],
             [ "BRAVERY", 2 ],
             [ "ANGER", -6 ],
-            [ "VALUE", 2 ],
+            [ "VALUE", 2 ]
           ]
         },
         "success": {
