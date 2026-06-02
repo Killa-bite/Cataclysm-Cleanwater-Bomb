@@ -280,7 +280,7 @@ preBuild.dependsOn createWindowsJunctionLinks
 createWindowsJunctionLinks.dependsOn makeLocalization
 
 android {
-    namespace "com.cleverraven.cataclysmdda"
+    namespace "com.lyhglytx.cataclysmcb"
     compileSdkVersion override_compileSdkVersion
     ndkVersion override_ndkVersion
 
@@ -298,7 +298,7 @@ android {
         versionCode Integer.valueOf(override_versionCode)
         versionName new File("$version_header_path").text.split('\"')[1]
         if (buildAsApplication) {
-            applicationId "com.cleverraven.cataclysmdda"
+            applicationId "com.lyhglytx.cataclysmcb"
         }
         resValue "string", "app_name", "Cataclysm DDA"
 
