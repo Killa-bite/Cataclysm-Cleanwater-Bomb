@@ -1,5 +1,5 @@
 {
-  "id": "org.cataclysmdda.CataclysmDDA",
+  "id": "org.lyhglytx.cataclysmcb",
   "default-branch": "experimental",
   "runtime": "org.freedesktop.Platform",
   "runtime-version": "22.08",

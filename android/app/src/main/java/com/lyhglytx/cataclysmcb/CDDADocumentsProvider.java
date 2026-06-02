@@ -1,4 +1,4 @@
-package com.cleverraven.cataclysmdda;
+package com.lyhglytx.cataclysmcb;
 
 import android.annotation.TargetApi;
 import android.content.Context;
