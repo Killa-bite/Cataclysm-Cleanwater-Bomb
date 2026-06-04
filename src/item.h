@@ -3528,6 +3528,12 @@ class item : public visitable
         cata::heap<FlagsSetType> suffix_tags_cache; // flags that will add suffixes to this item
         lazy<safe_reference_anchor> anchor;
         cata::heap<global_variables::impl_t> item_vars;
+        // True iff item_vars is non-empty. cata::heap wraps a unique_ptr, so
+        // reading item_vars through it costs an extra indirection; this cached
+        // bool lets the hot var accessors (get_value/maybe_get_value/has_var)
+        // short-circuit without the deref. Kept in sync at every item_vars
+        // mutation; not serialized (recomputed on load).
+        bool has_item_vars_ = false;
         const mtype *corpse = nullptr;
         std::string corpse_name;       // Name of the late lamented
         cata::heap<std::set<matec_id>> techniques; // item specific techniques

@@ -634,6 +634,11 @@ class pocket_constraint
         void constrain_by( const pocket_constraint &outer );
 };
 
+inline bool item_pocket::is_type( pocket_type ptype ) const
+{
+    return ptype == data->type;
+}
+
 template<>
 struct ret_val<item_pocket::contain_code>::default_success
     : public std::integral_constant<item_pocket::contain_code,

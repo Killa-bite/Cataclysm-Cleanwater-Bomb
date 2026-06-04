@@ -3297,6 +3297,10 @@ void item::io( Archive &archive )
     archive.io( "player_id", player_id, -1 );
     // item variables
     archive.io( "item_vars", item_vars, io::empty_default_tag() );
+    // archive.io fills item_vars without touching has_item_vars_; set it now so
+    // the var accessors are correct for the load-time migrations that run below.
+    // (The final resync near the end of this function fixes the post-erase state.)
+    has_item_vars_ = !item_vars.empty();
 
     // game::legacy_migrate_npctalk_var_prefix( item_vars );
     // doesn't work here, because item_vars is cata::heap<std::map<>>, not std::unordered_map<>
@@ -3505,6 +3509,8 @@ void item::io( Archive &archive )
     for( const std::string &var : removed_item_vars ) {
         item_vars.erase( var );
     }
+    // The legacy erase loops above may have emptied item_vars; keep the flag exact.
+    has_item_vars_ = !item_vars.empty();
 
     current_phase = static_cast<phase_id>( cur_phase );
     // override phase if frozen, needed for legacy save
