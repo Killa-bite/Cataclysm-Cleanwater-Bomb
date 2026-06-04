@@ -182,6 +182,7 @@ item::item( const itype *type, time_point turn, int qty ) : type( type ), bday( 
         countdown_point = calendar::turn + type->countdown_interval;
     }
     item_vars = type->item_variables;
+    has_item_vars_ = !item_vars.empty();
 
     update_prefix_suffix_flags();
     if( has_flag( flag_CORPSE ) ) {
@@ -1011,11 +1012,12 @@ bool item::merge_charges( const item &rhs )
 void item::set_var( const std::string &key, diag_value value )
 {
     item_vars[ key ] = std::move( value );
+    has_item_vars_ = true;
 }
 
 double item::get_var( std::string_view key, double default_value ) const
 {
-    if( item_vars.empty() ) {
+    if( !has_item_vars_ ) {
     return default_value;
 }
 if( diag_value const *ret = maybe_get_value( key ); ret ) {
@@ -1027,7 +1029,7 @@ if( diag_value const *ret = maybe_get_value( key ); ret ) {
 
 std::string item::get_var( std::string_view key, std::string default_value ) const
 {
-    if( item_vars.empty() ) {
+    if( !has_item_vars_ ) {
     return default_value;
 }
 if( diag_value const *ret = maybe_get_value( key ); ret ) {
@@ -1039,7 +1041,7 @@ if( diag_value const *ret = maybe_get_value( key ); ret ) {
 
 tripoint_abs_ms item::get_var( std::string_view key, tripoint_abs_ms default_value ) const
 {
-    if( item_vars.empty() ) {
+    if( !has_item_vars_ ) {
     return default_value;
 }
 if( diag_value const *ret = maybe_get_value( key ); ret ) {
@@ -1052,43 +1054,52 @@ if( diag_value const *ret = maybe_get_value( key ); ret ) {
 void item::remove_var( const std::string &key )
 {
     item_vars.erase( key );
+    has_item_vars_ = !item_vars.empty();
+}
+
+// item_vars is keyed by std::string, but the public accessors take a
+// std::string_view. Reuse a thread_local buffer for the lookup key so we avoid
+// a heap allocation on every get_value/maybe_get_value/has_var call. The
+// returned reference is only valid until the next call on the same thread,
+// which is fine: each caller consumes it immediately for a single map lookup.
+static const std::string &sv_to_var_key( std::string_view name )
+{
+    thread_local std::string key_buf;
+    key_buf.assign( name.data(), name.size() );
+    return key_buf;
 }
 
 diag_value const &item::get_value( std::string_view name ) const
 {
-    static diag_value const null_val;
-    diag_value const *ret = maybe_get_value( name );
-    return ret ? *ret : null_val;
+    if( !has_item_vars_ ) {
+        return global_variables::null_diag_value;
+    }
+    return global_variables::_common_get_value( sv_to_var_key( name ), item_vars );
 }
 
 diag_value const *item::maybe_get_value( std::string_view name ) const
 {
-    if( item_vars.empty() ) {
+    if( !has_item_vars_ ) {
         return nullptr;
     }
-    // Reuse a per-thread buffer so the string_view -> string conversion needed
-    // for the unordered_map lookup (C++17 has no heterogeneous lookup) does not
-    // allocate on every call. item::volume() hits this path constantly, so the
-    // previous std::string( name ) temporary showed up as a major new/delete hotspot.
-    thread_local std::string key_buf;
-    key_buf.assign( name );
-    auto it = item_vars.find( key_buf );
-    return it == item_vars.end() ? nullptr : &it->second;
+    return global_variables::_common_maybe_get_value( sv_to_var_key( name ), item_vars );
 }
 
 bool item::has_var( std::string_view name ) const
 {
-    return maybe_get_value( name ) != nullptr;
+    return has_item_vars_ && item_vars.count( sv_to_var_key( name ) ) > 0;
 }
 
 void item::erase_var( const std::string &name )
 {
     item_vars.erase( name );
+    has_item_vars_ = !item_vars.empty();
 }
 
 void item::clear_vars()
 {
     item_vars.clear();
+    has_item_vars_ = false;
 }
 
 bool item::is_owned_by( const Character &c, bool available_to_take ) const
@@ -2046,22 +2057,27 @@ if( contents.has_additional_pockets() ) {
         ret += links.weight();
     }
 
-    // reduce weight for sawn-off barrel capped to the apportioned weight of the barrel
-    if( gunmod_find( itype_barrel_small ) ) {
-    const units::volume b = type->gun->barrel_volume;
-    const units::mass max_barrel_weight = units::from_gram( to_milliliter( b ) );
-        const units::mass barrel_weight = units::from_gram( b.value() * type->weight.value() /
-                                          type->volume.value() );
-        ret -= std::min( max_barrel_weight, barrel_weight );
-    }
+    // Sawn-off barrel/stock are gun-only gunmods, so only guns need these checks;
+    // querying them for non-guns would build a throwaway gunmods() vector on hot
+    // paths like fire processing.
+    if( type->gun ) {
+        // reduce weight for sawn-off barrel capped to the apportioned weight of the barrel
+        if( gunmod_find( itype_barrel_small ) ) {
+            const units::volume b = type->gun->barrel_volume;
+            const units::mass max_barrel_weight = units::from_gram( to_milliliter( b ) );
+            const units::mass barrel_weight = units::from_gram( b.value() * type->weight.value() /
+                                              type->volume.value() );
+            ret -= std::min( max_barrel_weight, barrel_weight );
+        }
 
-    // reduce weight for sawn-off stock
-    if( gunmod_find( itype_stock_none ) ) {
-    // Length taken from item::length(), height and width are "average" values
-    const float stock_dimensions = 0.26f * 0.11f * 0.04f; // length * height * width = 0.00114 m3.
-    // density of 'wood' material
-    const int density = 850;
-    ret -= units::from_kilogram( stock_dimensions * density );
+        // reduce weight for sawn-off stock
+        if( gunmod_find( itype_stock_none ) ) {
+            // Length taken from item::length(), height and width are "average" values
+            const float stock_dimensions = 0.26f * 0.11f * 0.04f; // length * height * width = 0.00114 m3.
+            // density of 'wood' material
+            const int density = 850;
+            ret -= units::from_kilogram( stock_dimensions * density );
+        }
     }
 
     return ret;

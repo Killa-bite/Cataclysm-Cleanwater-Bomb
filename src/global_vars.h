@@ -11,6 +11,12 @@ class global_variables
     public:
         using impl_t = std::unordered_map<std::string, diag_value>;
 
+        // Shared empty sentinel returned by get_value() for missing keys.
+        // inline (C++17) gives a single program-wide instance accessed without a
+        // per-access init guard, which matters because get_value() is hot: it is
+        // queried for items during processing such as fire.
+        static inline const diag_value null_diag_value{};
+
         // Methods for setting/getting misc key/value pairs.
         void set_global_value( const std::string &key, diag_value value ) {
             global_values[ key ] = std::move( value );
@@ -39,9 +45,8 @@ class global_variables
         }
 
         static diag_value const &_common_get_value( const std::string &key, const impl_t &cont ) {
-            static diag_value const null_val;
             diag_value const *ret = _common_maybe_get_value( key, cont );
-            return ret ? *ret : null_val;
+            return ret ? *ret : null_diag_value;
         }
 
         impl_t &get_global_values() {
