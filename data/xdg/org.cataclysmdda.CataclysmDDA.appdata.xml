@@ -3,7 +3,7 @@
   <id>org.cataclysmdda.CataclysmDDA</id>
   <metadata_license>CC-BY-SA-3.0</metadata_license>
   <project_license>CC-BY-SA-3.0</project_license>
-  <name>Cataclysm: Dark Days Ahead</name>
+  <name>Cataclysm: Cleanwater Bomb</name>
   <summary>
     A turn-based survival game set in a post-apocalyptic world
   </summary>
@@ -93,7 +93,7 @@
     <release version="0.H" date="2024-07-22">
       <description>
         <p>
-          I'm proud to announce that the Cataclysm: Dark Days Ahead 0.H "Herbert" release is here!
+          I'm proud to announce that the Cataclysm: Cleanwater Bomb 0.H "Herbert" release is here!
           With an 11 month Gestation (before forking) and a 10 month delivery (after forking),
           we once again utterly failed to limit the scope of work with a release, the 0.H
           development process has been the longest in many releases, packing in thousands of new
@@ -221,7 +221,7 @@
         <p>
           After a long and anticlimactic buildup, we are pleased to
           announce the release of stable version 0.F "Frank" of
-          Cataclysm: Dark Days Ahead! Like our previous stable
+          Cataclysm: Cleanwater Bomb! Like our previous stable
           versions, this release features an expansive range of
           bugfixes, code and content additions, and new features.
           4,500 new game entities were added, 123,162 lines of source

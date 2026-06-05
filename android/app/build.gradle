@@ -300,7 +300,7 @@ android {
         if (buildAsApplication) {
             applicationId "com.lyhglytx.cataclysmcb"
         }
-        resValue "string", "app_name", "Cataclysm DDA"
+        resValue "string", "app_name", "Cataclysm: Cleanwater Bomb"
 
         splits {
             // Configures multiple APKs based on ABI.
@@ -358,12 +358,12 @@ android {
     productFlavors {
         stable {
             dimension "version"
-            resValue "string", "app_name", "Cataclysm DDA"
+            resValue "string", "app_name", "Cataclysm: Cleanwater Bomb"
         }
         experimental {
             dimension "version"
             applicationIdSuffix ".experimental"
-            resValue "string", "app_name", "Cataclysm DDA (experimental)"
+            resValue "string", "app_name", "Cataclysm: Cleanwater Bomb (experimental)"
         }
     }
 
