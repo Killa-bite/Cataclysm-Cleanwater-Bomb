@@ -7706,6 +7706,29 @@ static bool is_bulk_load( const item_location &lhs, const item_location &rhs )
     return false;
 }
 
+static bool is_empty_stackable_container_stack( const item_location &loc )
+{
+    return loc && loc->count_by_charges() && loc->charges > 1 &&
+           loc->is_container() && loc->container_type_pockets_empty();
+}
+
+static bool is_empty_stackable_container( const item_location &loc )
+{
+    return loc && loc->count_by_charges() && loc->charges > 0 &&
+           loc->is_container() && loc->container_type_pockets_empty();
+}
+
+static item_location single_container_from_stack( item_location &loc )
+{
+    if( is_empty_stackable_container_stack( loc ) ) {
+        item_location split = loc.split_stack( 1 );
+        if( split ) {
+            return split;
+        }
+    }
+    return loc;
+}
+
 void insert_item_activity_actor::start( player_activity &act, Character &who )
 {
     if( items.empty() ) {
@@ -7721,7 +7744,8 @@ void insert_item_activity_actor::start( player_activity &act, Character &who )
 }
 
 static ret_val<void> try_insert( item_location &holster, drop_location &holstered_item,
-                                 int *charges_added, Character *carrier, bool allow_fill_charge_item_nested )
+                                 int *charges_added, item_location *filled_container,
+                                 Character *carrier, bool allow_fill_charge_item_nested )
 {
     item &it = *holstered_item.first;
     ret_val<void> ret = ret_val<void>::make_failure( _( "item can't be stored there" ) );
@@ -7758,7 +7782,63 @@ static ret_val<void> try_insert( item_location &holster, drop_location &holstere
             return ret;
         }
 
-        return holster->put_in( it, pocket_type::CONTAINER, /*unseal_pockets=*/true, carrier );
+        item_location target = single_container_from_stack( holster );
+        if( !target ) {
+            return ret_val<void>::make_failure( _( "item can't be stored there" ) );
+        }
+        ret = target->put_in( it, pocket_type::CONTAINER, /*unseal_pockets=*/true, carrier );
+        if( ret.success() && filled_container != nullptr ) {
+            *filled_container = target;
+        }
+        return ret;
+    }
+
+    if( is_empty_stackable_container( holster ) ) {
+        item_location stack = holster;
+        item_location first_filled = item_location::nowhere;
+        int total_added = 0;
+        ret_val<void> last_ret = ret_val<void>::make_failure( _( "item can't be stored there" ) );
+        while( is_empty_stackable_container( stack ) &&
+               holstered_item.second > total_added ) {
+            last_ret = stack->can_contain_partial_directly( it );
+            if( !last_ret.success() ) {
+                break;
+            }
+            ret_val<int> max_parent_charges = stack.max_charges_by_parent_recursive( it );
+            if( !max_parent_charges.success() ) {
+                last_ret = ret_val<void>::make_failure( max_parent_charges.str() );
+                break;
+            }
+            const int charges_to_insert = std::min( holstered_item.second - total_added,
+                                                    max_parent_charges.value() );
+            if( charges_to_insert <= 0 ) {
+                break;
+            }
+            item_location target = single_container_from_stack( stack );
+            if( !target ) {
+                break;
+            }
+            const int added = target->fill_with( it, charges_to_insert, /*unseal_pockets=*/true,
+                                                /*allow_sealed=*/true, /*ignore_settings*/true, /*into_bottom*/true,
+                                                /*allow_nested*/allow_fill_charge_item_nested, carrier );
+            if( added <= 0 ) {
+                last_ret = ret_val<void>::make_failure( _( "item can't be stored there" ) );
+                break;
+            }
+            if( !first_filled ) {
+                first_filled = target;
+            }
+            total_added += added;
+            last_ret = ret_val<void>::make_success();
+        }
+        if( total_added > 0 ) {
+            *charges_added = total_added;
+            if( filled_container != nullptr ) {
+                *filled_container = first_filled;
+            }
+            return ret_val<void>::make_success();
+        }
+        return last_ret;
     }
 
     ret = holster->can_contain_partial_directly( it );
@@ -7790,6 +7870,9 @@ static ret_val<void> try_insert( item_location &holster, drop_location &holstere
     if( *charges_added <= 0 ) {
         return ret_val<void>::make_failure( _( "item can't be stored there" ) );
     }
+    if( filled_container != nullptr ) {
+        *filled_container = holster;
+    }
 
     return ret;
 }
@@ -7809,21 +7892,22 @@ void insert_item_activity_actor::finish( player_activity &act, Character &who )
             bulk_load = is_bulk_load( holstered_item.first, itr->first );
         }
         ret_val<void> ret = ret_val<void>::make_failure( _( "item can't be stored there" ) );
+        item_location filled_container = item_location::nowhere;
 
         if( !it.count_by_charges() ) {
-            ret = try_insert( holster, holstered_item, nullptr, carrier, false );
+            ret = try_insert( holster, holstered_item, nullptr, &filled_container, carrier, false );
 
             if( ret.success() ) {
                 //~ %1$s: item to put in the container, %2$s: container to put item in
                 who.add_msg_if_player( string_format( _( "You put your %1$s into the %2$s." ),
-                                                      holstered_item.first->display_name(), holster->type->nname( 1 ) ) );
-                handler.add_unsealed( holster );
+                                                      holstered_item.first->display_name(), filled_container->type->nname( 1 ) ) );
+                handler.add_unsealed( filled_container );
                 handler.unseal_pocket_containing( holstered_item.first );
                 holstered_item.first.remove_item();
             }
         } else {
             int charges_added = 0;
-            ret = try_insert( holster, holstered_item, &charges_added, carrier,
+            ret = try_insert( holster, holstered_item, &charges_added, &filled_container, carrier,
                               allow_fill_count_by_charge_item_nested );
 
             if( ret.success() ) {
@@ -7831,8 +7915,8 @@ void insert_item_activity_actor::finish( player_activity &act, Character &who )
                 copy.charges = charges_added;
                 //~ %1$s: item to put in the container, %2$s: container to put item in
                 who.add_msg_if_player( string_format( _( "You put your %1$s into the %2$s." ),
-                                                      copy.display_name(), holster->type->nname( 1 ) ) );
-                handler.add_unsealed( holster );
+                                                      copy.display_name(), filled_container->type->nname( 1 ) ) );
+                handler.add_unsealed( filled_container );
                 handler.unseal_pocket_containing( holstered_item.first );
                 it.charges -= charges_added;
                 if( it.charges == 0 ) {

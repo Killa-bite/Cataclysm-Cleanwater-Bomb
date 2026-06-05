@@ -499,6 +499,10 @@ item item::split( int qty )
     if( !count_by_charges() || qty <= 0 || qty >= charges ) {
         return item();
     }
+    if( is_container() && !container_type_pockets_empty() ) {
+        debugmsg( "tried to split stackable container with contents: %s", tname() );
+        return item();
+    }
     item res = *this;
     res.charges = qty;
     charges -= qty;
@@ -856,6 +860,10 @@ bool _stacks_components( item const &lhs, item const &rhs, bool check_components
 stacking_info item::stacks_with( const item &rhs, bool check_components, bool combine_liquid,
                                  bool check_cat, int depth, int maxdepth, bool precise ) const
 {
+    if( count_by_charges() && ( !container_type_pockets_empty() || !rhs.container_type_pockets_empty() ) ) {
+        return {};
+    }
+
     // Type mismatch cannot stack without a CATEGORY check.
     if( type != rhs.type && !check_cat ) {
         return {};
