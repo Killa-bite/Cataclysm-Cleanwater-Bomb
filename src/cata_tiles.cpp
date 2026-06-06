@@ -914,6 +914,20 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
     overlay_strings = here.overlay_strings_cache;
     color_blocks = here.color_blocks_cache;
 
+    // Precompute creature positions once per draw so the critter layers can skip
+    // the per-tile creature_at hash lookup (there are usually a handful of creatures
+    // versus thousands of visible tiles). Consumed by draw_critter_at (early-out on
+    // empty tiles) and draw_critter_above (skip the upward flying-shadow scan when
+    // nothing is above). Matches creature_at's sources: monsters (incl.
+    // hallucinations), npcs, and the avatar.
+    m_creature_positions.clear();
+    m_creature_columns.clear();
+    for( Creature &cr : g->all_creatures() ) {
+        const tripoint_bub_ms cpos = cr.pos_bub();
+        m_creature_positions.insert( cpos );
+        m_creature_columns.insert( cpos.xy() );
+    }
+
     // List all layers for a single z-level
     const std::array<decltype( &cata_tiles::draw_furniture ), 11> drawing_layers = {{
             &cata_tiles::draw_terrain, &cata_tiles::draw_furniture, &cata_tiles::draw_graffiti, &cata_tiles::draw_trap, &cata_tiles::draw_part_con,
@@ -3550,6 +3564,12 @@ bool cata_tiles::draw_critter_at( const tripoint_bub_ms &p, lit_level ll, int &h
         return false;
     }
 
+    // Fast path: with no creature on this tile (and no debug monster override
+    // active), there is nothing to draw here — skip the creature_at hash lookup.
+    if( monster_override.empty() && m_creature_positions.find( p ) == m_creature_positions.end() ) {
+        return false;
+    }
+
     bool result;
     bool is_player;
     bool sees_player;
@@ -3719,6 +3739,14 @@ bool cata_tiles::draw_critter_above( const tripoint_bub_ms &p, lit_level ll, int
                                      const std::array<bool, 5> &invisible )
 {
     if( invisible[0] ) {
+        return false;
+    }
+
+    // No creature anywhere in this (x,y) column — nothing can cast a shadow down
+    // onto this tile, so skip the upward creature_at scan entirely. This is the
+    // common case (creatures are sparse); only columns that actually contain a
+    // creature pay for the scan.
+    if( m_creature_columns.find( p.xy() ) == m_creature_columns.end() ) {
         return false;
     }
 

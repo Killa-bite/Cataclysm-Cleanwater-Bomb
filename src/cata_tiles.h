@@ -862,6 +862,16 @@ class cata_tiles
         sprite_screen_bounds *m_cur_bounds = nullptr;
         small_literal_vector<tint_sprite_record, 4> *m_cur_tint_sprites = nullptr;
 
+        // Per-draw caches rebuilt once per draw() from g->all_creatures(). Let the
+        // critter layers skip the per-tile creature_at hash lookup for the ~all
+        // tiles that hold no creature:
+        //   m_creature_positions - exact tiles, for draw_critter_at's early-out.
+        //   m_creature_columns   - (x,y) columns containing any creature, for
+        //     draw_critter_above: a creature only casts a downward shadow within
+        //     its own column, so columns with no creature skip the upward z-scan.
+        std::unordered_set<tripoint_bub_ms> m_creature_positions;
+        std::unordered_set<point_bub_ms> m_creature_columns;
+
         // Scratch render target for the ortho silhouette mask tint path. Sized
         // to fit the largest batched sprite region; reused across tiles/frames.
         SDL_Texture_Ptr tint_mask_tex;
