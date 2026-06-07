@@ -32,7 +32,7 @@ int submap_prefetcher::quad_dist( const tripoint_abs_omt &a, const tripoint_abs_
 void submap_prefetcher::request( const request_t &req, int priority )
 {
     {
-        std::lock_guard<std::mutex> lock( mutex_ );
+        std::scoped_lock<std::mutex> lock( mutex_ );
         // Dedup against queued / in-flight / completed-waiting-to-be-taken in O(log n).
         if( pending_.count( req.om ) || completed_.count( req.om ) ) {
             return;
@@ -54,7 +54,7 @@ void submap_prefetcher::request( const request_t &req, int priority )
 
 std::optional<std::string> submap_prefetcher::take( const tripoint_abs_omt &om )
 {
-    std::lock_guard<std::mutex> lock( mutex_ );
+    std::scoped_lock<std::mutex> lock( mutex_ );
     const auto it = completed_.find( om );
     if( it == completed_.end() ) {
         return std::nullopt;
@@ -66,7 +66,7 @@ std::optional<std::string> submap_prefetcher::take( const tripoint_abs_omt &om )
 
 void submap_prefetcher::evict_beyond( const tripoint_abs_omt &center, int max_dist )
 {
-    std::lock_guard<std::mutex> lock( mutex_ );
+    std::scoped_lock<std::mutex> lock( mutex_ );
     // Queued: drop entries that have drifted out of range (e.g. player turned).
     for( auto it = queue_.begin(); it != queue_.end(); ) {
         if( quad_dist( it->second.om, center ) > max_dist ) {
@@ -119,7 +119,7 @@ void submap_prefetcher::pause()
 
 void submap_prefetcher::resume()
 {
-    std::lock_guard<std::mutex> lock( mutex_ );
+    std::scoped_lock<std::mutex> lock( mutex_ );
     if( paused_ > 0 ) {
         paused_--;
     }
@@ -136,7 +136,7 @@ void submap_prefetcher::clear()
     // The worker lazily restarts on the next request(), so this is also safe for
     // mid-session world switches.
     stop_worker();
-    std::lock_guard<std::mutex> lock( mutex_ );
+    std::scoped_lock<std::mutex> lock( mutex_ );
     queue_.clear();
     pending_.clear();
     completed_.clear();
@@ -146,7 +146,7 @@ void submap_prefetcher::stop_worker()
 {
     std::thread to_join;
     {
-        std::lock_guard<std::mutex> lock( mutex_ );
+        std::scoped_lock<std::mutex> lock( mutex_ );
         if( !started_ ) {
             return;
         }
@@ -270,7 +270,7 @@ void submap_prefetcher::worker_loop()
         }
 
         {
-            std::lock_guard<std::mutex> lock( mutex_ );
+            std::scoped_lock<std::mutex> lock( mutex_ );
             // If evict_beyond() removed this OMT from pending_ while we were
             // reading, the player has moved past it; drop the bytes rather than
             // buffering work nobody will consume.
