@@ -192,9 +192,9 @@ def write_to_json(
 
 def list_or_first(iterable: list) -> Any:
     '''
-    Strip unneeded container list if there is only one value
+    Always return list — CCB parser requires fg/bg to be arrays
     '''
-    return iterable[0] if len(iterable) == 1 else iterable
+    return iterable
 
 
 def read_properties(filepath: str) -> dict:
