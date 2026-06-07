@@ -70,7 +70,7 @@ def collect_pngs(args: list) -> list:
 
 
 # ─── ──process 模式 ────────────────────────────────────
-def process_mode(xlsx_path: str, source_dir: str):
+def process_mode(xlsx_path: str, source_dir: str, project_path: str = ""):
     from openpyxl import load_workbook
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
@@ -87,7 +87,7 @@ def process_mode(xlsx_path: str, source_dir: str):
 
     wb = load_workbook(xlsx_path)
     detail_names = [s for s in wb.sheetnames if s not in ('汇总','贡献者')]
-    target = find_project_root() / "pngs_tiles_32x32"
+    target = (Path(project_path) if project_path else find_project_root()) / "pngs_tiles_32x32"
 
     hfont = Font(bold=True, color="FFFFFF", size=11)
     hfill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -225,16 +225,17 @@ def main():
     args = sys.argv[1:]
 
     if "--process" in args:
-        xlsx = ""; sdir = ""; i = 0
+        xlsx = ""; sdir = ""; proj = ""; i = 0
         while i < len(args):
             if args[i] == "--source" and i+1 < len(args): sdir = args[i+1]; i += 2
+            elif args[i] == "--project" and i+1 < len(args): proj = args[i+1]; i += 2
             elif args[i] == "--process": i += 1
             elif args[i].endswith('.xlsx'): xlsx = args[i]; i += 1
             else: i += 1
-        if not xlsx: print("用法: sort_sprites.py --process --source <PNG目录> <.xlsx>"); return
+        if not xlsx: print("用法: sort_sprites.py --process --source <PNG目录> --project <贴图目录> <.xlsx>"); return
         if not sdir:
             print("缺少 --source <PNG目录>"); return
-        process_mode(xlsx, sdir); return
+        process_mode(xlsx, sdir, proj); return
 
     manual_mode(args)
 
