@@ -26,6 +26,7 @@
 #include "game.h"
 #include "game_constants.h"
 #include "input.h"
+#include "line.h"
 #include "map.h"
 #include "memory_fast.h"
 #include "monster.h"
@@ -504,13 +505,86 @@ void draw_bullet_curses( map &m, const tripoint_bub_ms &t, const char bullet,
     bullet_animation().progress();
 }
 
+// Direction of travel at trajectory point i (uses the segment leading into i).
+direction get_bullet_dir( const std::vector<tripoint_bub_ms> &trajectory, size_t i )
+{
+    return i == 0 && trajectory.size() > 1 ?
+           direction_from( trajectory[i], trajectory[i + 1] ) :
+           ( i >= 1 && i < trajectory.size() ) ?
+           direction_from( trajectory[i - 1], trajectory[i] ) :
+           direction::NORTH;
+}
+
+std::string bullet_sprite_id( const char bullet )
+{
+    switch( bullet ) {
+        case '*':
+            return "animation_bullet_normal";
+        case '#':
+            return "animation_bullet_flame";
+        case '`':
+            return "animation_bullet_shrapnel";
+        default:
+            return {};
+    }
+}
+
+// Directional tracer sprite for the gun-line: an upward-pointing (0deg) beam
+// streak that the renderer rotates to the travel direction. Mirrors CBN's
+// "animation_bullet_*_0deg" convention. These sprites are flagged rotates:true
+// in the tileset; falls back to the round bullet sprite if absent.
+std::string tracer_sprite_id( const char bullet )
+{
+    switch( bullet ) {
+        case '*':
+            return "animation_bullet_normal_0deg";
+        case '#':
+            return "animation_bullet_flame_0deg";
+        case '`':
+            return "animation_bullet_shrapnel_0deg";
+        default:
+            return bullet_sprite_id( bullet );
+    }
+}
+
+// Map a travel direction to this renderer's rotation index. 0 == sprite's
+// default orientation (north/up). Cardinals reuse the engine's existing
+// rota codes (1=E, 2=S, 3=W); diagonals use the extended codes 5-8 added to
+// draw_sprite_at(). NOTE: cardinals follow THIS engine's handedness
+// (case 1 renders +90 deg), which is mirrored from CBN on E/W; the diagonal
+// angles (45/-45/-135/135) match CBN exactly.
+int get_bullet_rotation( direction dir )
+{
+    switch( dir ) {
+        case direction::NORTH:
+            return 0;
+        case direction::EAST:
+            return 1; // +90
+        case direction::SOUTH:
+            return 2; // 180
+        case direction::WEST:
+            return 3; // -90
+        case direction::NORTHEAST:
+            return 5; // +45
+        case direction::NORTHWEST:
+            return 6; // -45
+        case direction::SOUTHWEST:
+            return 7; // -135
+        case direction::SOUTHEAST:
+            return 8; // +135
+        default:
+            return 0;
+    }
+}
+
 } // namespace
 
 #if defined(TILES)
 /* Bullet Animation -- Maybe change this to animate the ammo itself flying through the air?*/
 // need to have a version where there is no player defined, possibly. That way shrapnel works as intended
 void game::draw_bullet( const tripoint_bub_ms &t, const int /*i*/,
-                        const std::vector<tripoint_bub_ms> &/*trajectory*/, const char bullet )
+                        const std::vector<tripoint_bub_ms> &/*trajectory*/, const char bullet,
+                        const std::string &custom_sprite )
 {
     if( test_mode ) {
         // avoid segfault from null tilecontext in tests
@@ -530,8 +604,11 @@ void game::draw_bullet( const tripoint_bub_ms &t, const int /*i*/,
     static const std::string bullet_flame    {"animation_bullet_flame"};
     static const std::string bullet_shrapnel {"animation_bullet_shrapnel"};
 
+    // An ammo/throw-specific sprite (looked up in projectile_attack) takes
+    // precedence over the generic per-symbol sprite, mirroring CBN.
     const std::string &bullet_type =
-        bullet == '*' ? bullet_normal
+        !custom_sprite.empty() ? custom_sprite
+        : bullet == '*' ? bullet_normal
         : bullet == '#' ? bullet_flame
         : bullet == '`' ? bullet_shrapnel
         : bullet_unknown;
@@ -548,9 +625,95 @@ void game::draw_bullet( const tripoint_bub_ms &t, const int /*i*/,
 #else
 void game::draw_bullet( const tripoint_bub_ms &t, const int i,
                         const std::vector<tripoint_bub_ms> &trajectory,
-                        const char bullet )
+                        const char bullet, const std::string &/*custom_sprite*/ )
 {
     draw_bullet_curses( m, t, bullet, &trajectory[i] );
+}
+#endif
+
+#if defined(TILES)
+// Draw the entire trajectory at once as a line of rotated tracer sprites (CBN-style gun line).
+void game::draw_bullet_line( const std::vector<tripoint_bub_ms> &trajectory, const char bullet,
+                             const std::string &custom_sprite )
+{
+    if( test_mode ) {
+        // avoid segfault from null tilecontext in tests
+        return;
+    }
+    if( trajectory.size() < 2 ) {
+        return;
+    }
+
+    if( !use_tiles ) {
+        // Curses fallback: highlight every visible tile of the trajectory in one frame.
+        avatar &player_character = get_avatar();
+        const tripoint_bub_ms vp = player_character.pos_bub() + player_character.view_offset;
+        map &here = get_map();
+        shared_ptr_fast<draw_callback_t> line_cb = make_shared_fast<draw_callback_t>( [&]() {
+            for( const tripoint_bub_ms &p : trajectory ) {
+                if( is_point_visible( p ) && p.z() == vp.z() ) {
+                    here.drawsq( g->w_terrain, p, drawsq_params().highlight( true ) );
+                }
+            }
+        } );
+        add_draw_callback( line_cb );
+        bullet_animation().progress();
+        return;
+    }
+
+    // Per-ammo/throw sprite (looked up in projectile_attack) wins; otherwise the
+    // directional beam streak (animation_bullet_*_0deg), rotated per-tile to point
+    // along the trajectory. Rotating a directional streak (not the round dot) is
+    // what makes the flight path read as a continuous gun line.
+    const std::string sprite = !custom_sprite.empty() ? custom_sprite : tracer_sprite_id( bullet );
+
+    std::vector<tripoint_bub_ms> points;
+    std::vector<std::string> sprites;
+    std::vector<int> rotations;
+    points.reserve( trajectory.size() );
+    sprites.reserve( trajectory.size() );
+    rotations.reserve( trajectory.size() );
+    for( size_t i = 0; i < trajectory.size(); ++i ) {
+        if( !is_point_visible( trajectory[i] ) ) {
+            continue;
+        }
+        points.push_back( trajectory[i] );
+        sprites.push_back( sprite );
+        // A single bullet sprite, rotated to point along the trajectory. The
+        // renderer rotates it per-tile (incl. diagonals) so the whole flight
+        // path reads as one continuous gun line.
+        rotations.push_back( get_bullet_rotation( get_bullet_dir( trajectory, i ) ) );
+    }
+    if( points.empty() ) {
+        return;
+    }
+
+    shared_ptr_fast<draw_callback_t> line_cb = make_shared_fast<draw_callback_t>( [&]() {
+        tilecontext->init_draw_bullets( points, sprites, rotations );
+    } );
+    add_draw_callback( line_cb );
+    bullet_animation().progress();
+    tilecontext->void_bullet();
+}
+#else
+void game::draw_bullet_line( const std::vector<tripoint_bub_ms> &trajectory, const char bullet,
+                             const std::string &/*custom_sprite*/ )
+{
+    if( trajectory.size() < 2 ) {
+        return;
+    }
+    avatar &player_character = get_avatar();
+    const tripoint_bub_ms vp = player_character.pos_bub() + player_character.view_offset;
+    map &here = get_map();
+    shared_ptr_fast<draw_callback_t> line_cb = make_shared_fast<draw_callback_t>( [&]() {
+        for( const tripoint_bub_ms &p : trajectory ) {
+            if( is_point_visible( p ) && p.z() == vp.z() ) {
+                here.drawsq( g->w_terrain, p, drawsq_params().highlight( true ) );
+            }
+        }
+    } );
+    add_draw_callback( line_cb );
+    bullet_animation().progress();
 }
 #endif
 

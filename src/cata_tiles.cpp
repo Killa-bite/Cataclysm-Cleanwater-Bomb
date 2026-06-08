@@ -1836,6 +1836,12 @@ const T &obj = s_id.obj();
 return find_tile_looks_like( obj.looks_like, category, "", looks_like_jumps_limit - 1 );
 }
 
+std::string cata_tiles::find_bullet_sprite_id( const std::string &id, TILE_CATEGORY category )
+{
+    std::optional<tile_lookup_res> res = find_tile_looks_like( id, category, "" );
+    return res ? res->id() : std::string{};
+}
+
 std::optional<tile_lookup_res>
 cata_tiles::find_tile_looks_like( const std::string &id, TILE_CATEGORY category,
                                   const std::string &variant,
@@ -2470,9 +2476,12 @@ bool cata_tiles::draw_from_id_string_internal( const std::string &id, TILE_CATEG
             }
     }
 
-    // make sure we aren't going to rotate the tile if it shouldn't be rotated
+    // make sure we aren't going to rotate the tile if it shouldn't be rotated.
+    // BULLET is exempt: projectile sprites are intentionally rotated to point
+    // along the trajectory even though the tile itself is flagged rotates:false.
     if( !display_tile.rotates && !( category == TILE_CATEGORY::NONE )
-        && !( category == TILE_CATEGORY::MONSTER ) ) {
+        && !( category == TILE_CATEGORY::MONSTER )
+        && !( category == TILE_CATEGORY::BULLET ) ) {
         rota = 0;
     }
 
@@ -2538,7 +2547,7 @@ bool cata_tiles::draw_from_id_string_internal( const std::string &id, TILE_CATEG
         rp.tint = pending_part_tint_;
     }
     draw_tile_at( display_tile, screen_pos, loc_rand, rota, rp,
-                  retract, height_3d, offset );
+                  retract, height_3d, offset, /*allow_diagonal_rota:*/ category == TILE_CATEGORY::BULLET );
 
     return true;
 }
@@ -2546,7 +2555,8 @@ bool cata_tiles::draw_from_id_string_internal( const std::string &id, TILE_CATEG
 bool cata_tiles::draw_sprite_at(
     const tile_type &tile, const weighted_int_list<std::vector<int>> &svlist,
     const point &p, unsigned int loc_rand, bool rota_fg, int rota,
-    const tile_render_params &rp, int retract, int &height_3d, const point &offset )
+    const tile_render_params &rp, int retract, int &height_3d, const point &offset,
+    bool allow_diagonal_rota )
 {
     const std::vector<int> *picked = svlist.pick( loc_rand );
     if( !picked ) {
@@ -2695,7 +2705,10 @@ bool cata_tiles::draw_sprite_at(
         if( rota == -1 ) {
             render_flip = SDL_FLIP_HORIZONTAL;
         } else if( !iso ) {
-            switch( rota % 4 ) {
+            // Non-bullet tiles keep the historical `% 4` fold exactly. Bullets
+            // opt into the extended codes (5-8) for true diagonal rotation.
+            const int r = allow_diagonal_rota ? rota : ( rota % 4 );
+            switch( r ) {
                 case 1:
                     render_angle = 90;
                     break;
@@ -2704,6 +2717,19 @@ bool cata_tiles::draw_sprite_at(
                     break;
                 case 3:
                     render_angle = -90;
+                    break;
+                // Diagonal rotations, only reachable when allow_diagonal_rota.
+                case 5:
+                    render_angle = 45;
+                    break;
+                case 6:
+                    render_angle = -45;
+                    break;
+                case 7:
+                    render_angle = -135;
+                    break;
+                case 8:
+                    render_angle = 135;
                     break;
                 default:
                     break;
@@ -2727,7 +2753,10 @@ bool cata_tiles::draw_sprite_at(
                       renderer, &destination, 0, nullptr,
                       static_cast<CataFlipMode>( SDL_FLIP_HORIZONTAL ) );
         } else {
-            switch( rota % 4 ) {
+            // Non-bullet tiles keep the historical `% 4` fold exactly. Bullets
+            // opt into the extended codes (5-8) for true diagonal rotation.
+            const int r = allow_diagonal_rota ? rota : ( rota % 4 );
+            switch( r ) {
                 default:
                 case 0:
                     // unrotated (and 180, with just two sprites)
@@ -2782,6 +2811,46 @@ bool cata_tiles::draw_sprite_at(
                                                           SDL_FLIP_NONE );
                     }
                     break;
+                case 5:
+                    // 45 degrees (diagonal, bullets only)
+                    if( !iso ) {
+                        ret = sprite_tex->render_copy_ex( renderer, &destination, 45, nullptr,
+                                                          SDL_FLIP_NONE );
+                    } else {
+                        ret = sprite_tex->render_copy_ex( renderer, &destination, 0, nullptr,
+                                                          SDL_FLIP_NONE );
+                    }
+                    break;
+                case 6:
+                    // -45 degrees (diagonal, bullets only)
+                    if( !iso ) {
+                        ret = sprite_tex->render_copy_ex( renderer, &destination, -45, nullptr,
+                                                          SDL_FLIP_NONE );
+                    } else {
+                        ret = sprite_tex->render_copy_ex( renderer, &destination, 0, nullptr,
+                                                          SDL_FLIP_NONE );
+                    }
+                    break;
+                case 7:
+                    // -135 degrees (diagonal, bullets only)
+                    if( !iso ) {
+                        ret = sprite_tex->render_copy_ex( renderer, &destination, -135, nullptr,
+                                                          SDL_FLIP_NONE );
+                    } else {
+                        ret = sprite_tex->render_copy_ex( renderer, &destination, 0, nullptr,
+                                                          SDL_FLIP_NONE );
+                    }
+                    break;
+                case 8:
+                    // 135 degrees (diagonal, bullets only)
+                    if( !iso ) {
+                        ret = sprite_tex->render_copy_ex( renderer, &destination, 135, nullptr,
+                                                          SDL_FLIP_NONE );
+                    } else {
+                        ret = sprite_tex->render_copy_ex( renderer, &destination, 0, nullptr,
+                                                          SDL_FLIP_NONE );
+                    }
+                    break;
             }
         }
     } else {
@@ -2804,13 +2873,13 @@ bool cata_tiles::draw_sprite_at(
 bool cata_tiles::draw_tile_at(
     const tile_type &tile, const point &p, unsigned int loc_rand, int rota,
     const tile_render_params &rp, int retract, int &height_3d,
-    const point &offset )
+    const point &offset, bool allow_diagonal_rota )
 {
     int fake_int = height_3d;
     draw_sprite_at( tile, tile.bg, p, loc_rand, /*fg:*/ false, rota, rp,
-                    retract, fake_int, offset );
+                    retract, fake_int, offset, allow_diagonal_rota );
     draw_sprite_at( tile, tile.fg, p, loc_rand, /*fg:*/ true, rota, rp,
-                    retract, height_3d, offset );
+                    retract, height_3d, offset, allow_diagonal_rota );
     return true;
 }
 
@@ -4217,11 +4286,20 @@ void cata_tiles::init_custom_explosion_layer( const std::map<tripoint_bub_ms, ex
     do_draw_custom_explosion = true;
     custom_explosion_layer = layer;
 }
-void cata_tiles::init_draw_bullet( const tripoint_bub_ms &p, std::string name )
+void cata_tiles::init_draw_bullet( const tripoint_bub_ms &p, std::string name, int rotation )
 {
     do_draw_bullet = true;
-    bul_pos = p;
-    bul_id = std::move( name );
+    bul_pos.push_back( p );
+    bul_id.push_back( std::move( name ) );
+    bul_rotation.push_back( rotation );
+}
+void cata_tiles::init_draw_bullets( const std::vector<tripoint_bub_ms> &ps,
+                                    const std::vector<std::string> &names, const std::vector<int> &rotations )
+{
+    do_draw_bullet = true;
+    bul_pos.insert( bul_pos.end(), ps.begin(), ps.end() );
+    bul_id.insert( bul_id.end(), names.begin(), names.end() );
+    bul_rotation.insert( bul_rotation.end(), rotations.begin(), rotations.end() );
 }
 void cata_tiles::init_draw_hit( const Creature &critter )
 {
@@ -4330,8 +4408,9 @@ void cata_tiles::void_custom_explosion()
 void cata_tiles::void_bullet()
 {
     do_draw_bullet = false;
-    bul_pos = { -1, -1, -1 };
+    bul_pos.clear();
     bul_id.clear();
+    bul_rotation.clear();
 }
 void cata_tiles::void_hit()
 {
@@ -4565,8 +4644,10 @@ void cata_tiles::draw_custom_explosion_frame()
 }
 void cata_tiles::draw_bullet_frame()
 {
-    draw_from_id_string( bul_id, TILE_CATEGORY::BULLET, empty_string, bul_pos, 0, 0,
-                         lit_level::LIT, false );
+    for( size_t i = 0; i < bul_pos.size(); ++i ) {
+        draw_from_id_string( bul_id[i], TILE_CATEGORY::BULLET, empty_string, bul_pos[i], 0,
+                             bul_rotation[i], lit_level::LIT, false );
+    }
 }
 void cata_tiles::draw_hit_frame()
 {
