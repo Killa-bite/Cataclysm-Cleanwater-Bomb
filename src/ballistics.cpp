@@ -40,6 +40,10 @@
 #include "type_id.h"
 #include "units.h"
 #include "vpart_position.h"
+#if defined(TILES)
+#include "cata_tiles.h" // for per-ammo bullet sprite lookup
+#include "sdltiles.h"    // for tilecontext
+#endif
 
 static const ammo_effect_str_id ammo_effect_ACT_ON_RANGED_HIT( "ACT_ON_RANGED_HIT" );
 static const ammo_effect_str_id ammo_effect_BOUNCE( "BOUNCE" );
@@ -302,11 +306,49 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
                         proj_effects.count( ammo_effect_JET ) > 0;
     const char bullet = stream ? '#' : '*';
     const bool no_item_damage = proj_effects.count( ammo_effect_NO_ITEM_DAMAGE ) > 0;
-    const bool do_draw_line = proj_effects.count( ammo_effect_DRAW_AS_LINE ) > 0;
+    const bool do_draw_line = proj_effects.count( ammo_effect_DRAW_AS_LINE ) > 0 ||
+                              get_option<bool>( "BULLETS_AS_LASERS" );
     const bool null_source = proj_effects.count( ammo_effect_NULL_SOURCE ) > 0;
     // Determines whether it can penetrate obstacles
     const bool is_bullet = proj_arg.speed >= 200 &&
                            !proj_effects.count( ammo_effect_NO_PENETRATE_OBSTACLES );
+
+    // Look up an ammo/throw-specific flight sprite, mirroring CBN. Falls back to
+    // the generic '*'/'#'/'`' sprite when no per-item art exists. The source
+    // weapon is available via wp_attack.weapon (set by both the gun and throw
+    // paths), so no signature change is needed here.
+    std::string custom_bullet_sprite;
+#if defined(TILES)
+    if( tilecontext ) {
+        const bool is_thrown = wp_attack.is_thrown;
+        const auto set_sprite_from_lookup = [&]( const std::string & candidate,
+        const TILE_CATEGORY cat ) {
+            if( !custom_bullet_sprite.empty() ) {
+                return;
+            }
+            const std::string resolved = tilecontext->find_bullet_sprite_id( candidate, cat );
+            if( !resolved.empty() ) {
+                custom_bullet_sprite = resolved;
+            }
+        };
+
+        const item &drop = proj.get_drop();
+        if( !drop.is_null() ) {
+            const std::string id = drop.typeId().str();
+            set_sprite_from_lookup( "animation_bullet_" + id, TILE_CATEGORY::BULLET );
+            if( is_thrown ) {
+                set_sprite_from_lookup( id, TILE_CATEGORY::ITEM );
+            }
+        }
+
+        if( custom_bullet_sprite.empty() && wp_attack.weapon ) {
+            const itype_id ammo_type = wp_attack.weapon->ammo_current();
+            if( !ammo_type.is_null() ) {
+                set_sprite_from_lookup( "animation_bullet_" + ammo_type.str(), TILE_CATEGORY::BULLET );
+            }
+        }
+    }
+#endif // TILES
 
     // If we were targeting a tile rather than a monster, don't overshoot
     // Unless the target was a wall, then we are aiming high enough to overshoot
@@ -485,7 +527,7 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
                 if( projectile_skip_current_frame >= projectile_skip_calculation ) {
                     // TODO: Refine so overlapping maps are handled.
                     if( here == &reality_bubble() ) {
-                        g->draw_bullet( tp, static_cast<int>( i ), trajectory, bullet );
+                        g->draw_bullet( tp, static_cast<int>( i ), trajectory, bullet, custom_bullet_sprite );
                     }
                     projectile_skip_current_frame = 0;
                     // If we missed recalculate the skip factor so they spread out.
@@ -654,8 +696,8 @@ void projectile_attack( dealt_projectile_attack &attack, const projectile &proj_
         if( first && do_animation && do_draw_line && traj_len > 2 ) {
             t_copy.erase( t_copy.begin() );
             t_copy.resize( traj_len-- );
-            g->draw_line( tp, t_copy );
-            g->draw_bullet( tp, static_cast<int>( traj_len-- ), t_copy, bullet );
+            // Draw the whole flight path at once as a gun line of rotated tracer sprites.
+            g->draw_bullet_line( t_copy, bullet, custom_bullet_sprite );
         }
 
         if( here->impassable( tp ) ) {

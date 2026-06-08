@@ -864,7 +864,11 @@ class game
 
         // Animation related functions
         void draw_bullet( const tripoint_bub_ms &t, int i, const std::vector<tripoint_bub_ms> &trajectory,
-                          char bullet );
+                          char bullet, const std::string &custom_sprite = {} );
+        // Draw the whole projectile trajectory at once as a "gun line" of rotated tracer
+        // sprites (CBN-style), instead of animating a single bullet hopping tile-by-tile.
+        void draw_bullet_line( const std::vector<tripoint_bub_ms> &trajectory, char bullet,
+                               const std::string &custom_sprite = {} );
         void draw_hit_mon( const tripoint_bub_ms &p, const monster &m, bool dead = false );
         void draw_hit_player( const Character &p, int dam ) const;
         void draw_line( const tripoint_bub_ms &p, const tripoint_bub_ms &center_point,

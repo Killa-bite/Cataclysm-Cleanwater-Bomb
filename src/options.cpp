@@ -2345,6 +2345,13 @@ void options_manager::add_options_graphics()
 
         get_option( "ANIMATION_PROJECTILES" ).setPrerequisite( "ANIMATIONS" );
 
+        add( "BULLETS_AS_LASERS", page_id, to_translation( "Draw bullets as lines" ),
+             to_translation( "If true, projectiles are drawn as a line of images along their whole flight path, and the animation lasts only one frame." ),
+             true
+           );
+
+        get_option( "BULLETS_AS_LASERS" ).setPrerequisite( "ANIMATION_PROJECTILES" );
+
         add( "ANIMATION_SCT", page_id, to_translation( "SCT animation" ),
              to_translation( "If true, will display scrolling combat text animations." ),
              true

@@ -608,6 +608,14 @@ class cata_tiles
         /** Minimap functionality */
         void draw_minimap( const point &dest, const tripoint_bub_ms &center, int width, int height );
 
+        /**
+         * Resolve a candidate tile id (following looks_like fallbacks) and return
+         * the id of an existing sprite, or an empty string if none is found.
+         * Public wrapper around find_tile_looks_like for callers outside the
+         * renderer (e.g. per-ammo bullet sprite lookup in ballistics).
+         */
+        std::string find_bullet_sprite_id( const std::string &id, TILE_CATEGORY category );
+
     protected:
         /** How many rows and columns of tiles fit into given dimensions, fully
          ** or partially shown, but disregarding any extra contents outside the
@@ -696,10 +704,11 @@ class cata_tiles
         bool draw_sprite_at(
             const tile_type &tile, const weighted_int_list<std::vector<int>> &svlist,
             const point &, unsigned int loc_rand, bool rota_fg, int rota,
-            const tile_render_params &rp, int retract, int &height_3d, const point &offset );
+            const tile_render_params &rp, int retract, int &height_3d, const point &offset,
+            bool allow_diagonal_rota = false );
         bool draw_tile_at( const tile_type &tile, const point &, unsigned int loc_rand, int rota,
                            const tile_render_params &rp, int retract, int &height_3d,
-                           const point &offset );
+                           const point &offset, bool allow_diagonal_rota = false );
 
         /* Tile Picking */
         void get_tile_values( int t, const std::array<int, 4> &tn, int &subtile, int &rotation,
@@ -800,7 +809,9 @@ class cata_tiles
         void draw_custom_explosion_frame();
         void void_custom_explosion();
 
-        void init_draw_bullet( const tripoint_bub_ms &p, std::string name );
+        void init_draw_bullet( const tripoint_bub_ms &p, std::string name, int rotation = 0 );
+        void init_draw_bullets( const std::vector<tripoint_bub_ms> &ps,
+                                const std::vector<std::string> &names, const std::vector<int> &rotations );
         void draw_bullet_frame();
         void void_bullet();
 
@@ -1033,8 +1044,9 @@ class cata_tiles
         std::map<tripoint_bub_ms, explosion_tile> custom_explosion_layer;
         std::map<tripoint_bub_ms, std::string> async_anim_layer;
 
-        tripoint_bub_ms bul_pos;
-        std::string bul_id;
+        std::vector<tripoint_bub_ms> bul_pos;
+        std::vector<std::string> bul_id;
+        std::vector<int> bul_rotation;
 
         struct hit_animation {
             weak_ptr_fast<Creature> creature_ptr;
