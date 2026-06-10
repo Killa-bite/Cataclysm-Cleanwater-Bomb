@@ -1264,6 +1264,9 @@ void computer_session::action_irradiator()
                     // actual food processing
                     if( !it->rotten() ) {
                         it->set_flag( flag_IRRADIATED );
+                        time_duration rot_val = it->get_rot();
+                        rot_val *= 0.25;
+                        it->set_rot( rot_val );
                     }
                     // critical failure - radiation spike sets off electronic detonators
                     if( it->typeId() == itype_mininuke || it->typeId() == itype_mininuke_act ||
