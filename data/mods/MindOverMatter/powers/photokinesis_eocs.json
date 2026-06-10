@@ -166,7 +166,16 @@
         "true_eocs": [
           {
             "id": "EOC_PHOTOKIN_RADIATION_STERILIZATION_FINALIZE_END",
-            "effect": [ { "npc_unset_flag": "PHOTOKIN_IRRADIATION_READY" }, { "npc_set_flag": "IRRADIATED" } ]
+            "effect": [
+              { "npc_unset_flag": "PHOTOKIN_IRRADIATION_READY" },
+              { "npc_set_flag": "IRRADIATED" },
+              {
+                "if": { "math": [ "n_item_rot() >= 0" ] },
+                "then": [
+                  { "math": [ "n_item_rot() *= 0.25" ] }
+                ]
+              }
+            ]
           }
         ]
       }
