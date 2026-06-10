@@ -804,13 +804,12 @@ void draw_hit_player_curses( const game &/* g */, const Character &p, const int 
 void game::draw_hit_player( const Character &p, const int dam, const float damage_fraction,
                             const Creature *source ) const
 {
-    if( test_mode ) {
-    // avoid segfault from null tilecontext in tests
-    return;
-}
-
-if( !use_tiles ) {
-    draw_hit_player_curses( *this, p, dam );
+    if( test_mode || !tilecontext ) {
+        // avoid segfault from null tilecontext in tests
+        return;
+    }
+    if( !use_tiles ) {
+        draw_hit_player_curses( *this, p, dam );
         return;
     }
     // Knockback direction: from the attacker toward the victim (victim - source).
