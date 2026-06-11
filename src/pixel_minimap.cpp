@@ -260,28 +260,63 @@ void pixel_minimap::clear_unused_cache()
 }
 
 //draws individual updates to the submap cache texture
-void pixel_minimap::flush_cache_updates()
+//returns true if any chunk texture was actually repainted this frame
+bool pixel_minimap::flush_cache_updates()
 {
+    // Each chunk owns a separate texture, so the updates cannot share a single
+    // bind. The old code wrapped every chunk in its own scoped_render_target,
+    // which captured and restored the prior target per chunk -- 2 SetRenderTarget
+    // calls per chunk. On the SDL3 GPU backend each SDL_SetRenderTarget forces a
+    // full GPU command-queue flush (FlushRenderCommands -> GPU_RunCommandQueue),
+    // so that cost was 2N flushes per frame and scaled with the visible chunk
+    // count. Capture the caller's prior target once, switch directly between
+    // chunk textures, and restore once at the end: N+1 switches instead of 2N.
+
+    // Skip entirely when nothing changed so we never touch the render target.
+    bool any_updates = false;
+    for( const auto &mcp : cache ) {
+        if( !mcp.second.update_list.empty() ) {
+            any_updates = true;
+            break;
+        }
+    }
+    if( !any_updates ) {
+        return false;
+    }
+
+    // Recovery already latched: the renderer may be dangling after a LOST
+    // handover, so even SDL_GetRenderTarget is unsafe. Refuse before any SDL
+    // call, mirroring scoped_render_target's pre-switch refusal.
+    if( renderer_boundary_recovery_pending() ) {
+        display_buffer_scope_signal_recovery_required();
+        throw std::runtime_error(
+            "pixel_minimap::flush_cache_updates: renderer boundary recovery pending" );
+    }
+
+#if SDL_MAJOR_VERSION >= 3
+    cata_shader::variant_pass *const vp = get_shared_variant_pass();
+#else
+    cata_shader::variant_pass *const vp = nullptr;
+#endif
+
+    // Capture the prior target once; every chunk shares the same caller target.
+    SDL_Texture *const prior_target = SDL_GetRenderTarget( renderer.get() );
+
     for( auto &mcp : cache ) {
         if( mcp.second.update_list.empty() ) {
             continue;
         }
 
-        scoped_render_target chunk_scope( renderer, mcp.second.chunk_tex.get()
-#if SDL_MAJOR_VERSION >= 3
-                                          , get_shared_variant_pass()
-#endif
-                                        );
-        if( !chunk_scope.is_valid() ) {
-            if( !chunk_scope.boundary_intact() ) {
-                // Boundary lost: latch so the enclosing dtor skips detach.
-                display_buffer_scope_signal_recovery_required();
-            }
-            // Chunk did not paint, so a later render would composite stale data.
-            // Throw to abort the frame, like the tint-mask path.
-            throw std::runtime_error( chunk_scope.boundary_intact()
-                                      ? "pixel_minimap::flush_cache_updates: variant_pass refused boundary"
-                                      : "pixel_minimap::flush_cache_updates: scoped_render_target boundary lost" );
+        const bind_result r = permanent_render_target_bind( renderer, mcp.second.chunk_tex.get(), vp );
+        if( r != bind_result::ok ) {
+            // failed_in_switch already latched recovery and left the renderer
+            // undefined; refused_pre_switch means a null renderer. Either way the
+            // chunk did not paint and re-binding the prior target is unsafe, so
+            // abort the frame like the original scoped path did. (Skip the
+            // restore: another switch on an undefined renderer deepens corruption.)
+            display_buffer_scope_signal_recovery_required();
+            throw std::runtime_error(
+                "pixel_minimap::flush_cache_updates: scoped_render_target boundary lost" );
         }
 
         if( !mcp.second.ready ) {
@@ -315,18 +350,20 @@ void pixel_minimap::flush_cache_updates()
         }
 
         mcp.second.update_list.clear();
-
-        // Restore failure leaves later draws landing on the chunk texture or an
-        // undefined target, so propagate like the other scoped failures.
-        if( !chunk_scope.restore() ) {
-            if( !chunk_scope.boundary_intact() ) {
-                display_buffer_scope_signal_recovery_required();
-            }
-            throw std::runtime_error( chunk_scope.boundary_intact()
-                                      ? "pixel_minimap::flush_cache_updates: variant_pass refused boundary on restore"
-                                      : "pixel_minimap::flush_cache_updates: failed to restore prior render target" );
-        }
     }
+
+    // Restore the caller's prior target once. A failure leaves later draws
+    // landing on a chunk texture or an undefined target, so propagate like the
+    // original per-chunk restore did.
+    const bind_result rr = permanent_render_target_bind( renderer, prior_target, vp );
+    if( rr != bind_result::ok ) {
+        display_buffer_scope_signal_recovery_required();
+        throw std::runtime_error(
+            "pixel_minimap::flush_cache_updates: failed to restore prior render target" );
+    }
+
+    // Reached only when any_updates was true, so at least one chunk repainted.
+    return true;
 }
 
 void pixel_minimap::update_cache_at( const tripoint_bub_sm &sm_pos )
@@ -388,7 +425,7 @@ pixel_minimap::submap_cache &pixel_minimap::get_cache_at( const tripoint_abs_sm 
     return it->second;
 }
 
-void pixel_minimap::process_cache( const tripoint_bub_ms &center )
+bool pixel_minimap::process_cache( const tripoint_bub_ms &center )
 {
     prepare_cache_for_updates( center );
 
@@ -398,8 +435,9 @@ void pixel_minimap::process_cache( const tripoint_bub_ms &center )
         }
     }
 
-    flush_cache_updates();
+    const bool chunks_repainted = flush_cache_updates();
     clear_unused_cache();
+    return chunks_repainted;
 }
 
 void pixel_minimap::set_screen_rect( const SDL_Rect &screen_rect )
@@ -445,6 +483,10 @@ void pixel_minimap::set_screen_rect( const SDL_Rect &screen_rect )
 
     cache.clear();
 
+    // main_tex was just recreated, so any cached skip-state refers to a dead
+    // texture; force a full repaint next render.
+    main_tex_valid_ = false;
+
     const point chunk_size = projector->get_tiles_size( { SEEX, SEEY } );
 
     const auto chunk_texture_generator = [&chunk_size, this]() {
@@ -462,10 +504,42 @@ void pixel_minimap::reset()
     cache.clear();
     main_tex.reset();
     tex_pool.reset();
+    main_tex_valid_ = false;
 }
 
-void pixel_minimap::render( const tripoint_bub_ms &center )
+void pixel_minimap::render( const tripoint_bub_ms &center, const bool chunks_repainted )
 {
+    const tripoint_abs_sm abs_sub = get_map().get_abs_sub();
+
+    // Scan critters every frame: a critter can enter or leave view even when the
+    // camera is still, and this also refreshes has_blinking_beacons_, which the
+    // caller relies on to drive animation regardless of whether we repaint.
+    std::vector<beacon> beacons = collect_critter_beacons( center );
+
+    // main_tex content is fully determined by the camera position, the chunk
+    // textures, and the beacon layer. If none changed since the last paint and
+    // the texture is still valid, reuse it: skip the bind / clear / chunk-copy /
+    // beacon draw, which on the SDL3 GPU backend each force a full command-queue
+    // flush. Just re-composite the existing main_tex to the screen. Position is
+    // compared at tile resolution (center + abs_sub) because a move within one
+    // submap still shifts the rendered image.
+    //
+    // The background color (pixel_minimap_r/g/b/a) and brightness are NOT part
+    // of this check: today they only change via set_settings()/reset() or the
+    // init_ui() first-init path, both of which clear main_tex_valid_. If a
+    // feature is ever added that mutates those global color values at runtime
+    // without going through reset(), it must also invalidate this cache.
+    const bool unchanged = main_tex_valid_ &&
+                           !chunks_repainted &&
+                           abs_sub == last_render_abs_sub &&
+                           center == last_render_center &&
+                           beacons == last_beacons_;
+
+    if( unchanged ) {
+        RenderCopy( renderer, main_tex, &main_tex_clip_rect, &screen_clip_rect );
+        return;
+    }
+
     scoped_render_target main_scope( renderer, main_tex.get()
 #if SDL_MAJOR_VERSION >= 3
                                      , get_shared_variant_pass()
@@ -485,7 +559,9 @@ void pixel_minimap::render( const tripoint_bub_ms &center )
     RenderClear( renderer );
 
     render_cache( center );
-    render_critters( center );
+    for( const beacon &b : beacons ) {
+        draw_beacon( b.rect, b.color );
+    }
 
     // Restore so the compositing RenderCopy below lands on the caller's prior
     // target, not main_tex.
@@ -493,10 +569,21 @@ void pixel_minimap::render( const tripoint_bub_ms &center )
         if( !main_scope.boundary_intact() ) {
             display_buffer_scope_signal_recovery_required();
         }
+        // main_tex was repainted, so its valid bit no longer reflects a clean
+        // restore; clear it so the next frame does not trust a stale skip.
+        main_tex_valid_ = false;
         throw std::runtime_error( main_scope.boundary_intact()
                                   ? "pixel_minimap::render: variant_pass refused boundary on restore"
                                   : "pixel_minimap::render: failed to restore prior render target" );
     }
+
+    // Paint succeeded: record what main_tex now holds so the next frame can
+    // decide whether to skip.
+    main_tex_valid_ = true;
+    last_render_abs_sub = abs_sub;
+    last_render_center = center;
+    last_beacons_ = std::move( beacons );
+
     RenderCopy( renderer, main_tex, &main_tex_clip_rect, &screen_clip_rect );
 }
 
@@ -541,8 +628,10 @@ void pixel_minimap::render_cache( const tripoint_bub_ms &center )
     }
 }
 
-void pixel_minimap::render_critters( const tripoint_bub_ms &center )
+std::vector<pixel_minimap::beacon> pixel_minimap::collect_critter_beacons(
+    const tripoint_bub_ms &center )
 {
+    std::vector<beacon> beacons;
     has_blinking_beacons_ = false;
 
     const map &m = get_map();
@@ -598,9 +687,11 @@ void pixel_minimap::render_critters( const tripoint_bub_ms &center )
             if( indicator_length > 0 ) {
                 has_blinking_beacons_ = true;
             }
-            draw_beacon( critter_rect, critter_color );
+            beacons.push_back( beacon{ critter_rect, critter_color } );
         }
     }
+
+    return beacons;
 }
 
 //the main call for drawing the pixel minimap to the screen
@@ -615,8 +706,8 @@ void pixel_minimap::draw( const SDL_Rect &screen_rect, const tripoint_bub_ms &ce
     }
 
     set_screen_rect( screen_rect );
-    process_cache( center );
-    render( center );
+    const bool chunks_repainted = process_cache( center );
+    render( center, chunks_repainted );
 }
 
 void pixel_minimap::draw_beacon( const SDL_Rect &rect, const SDL_Color &color )
