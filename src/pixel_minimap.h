@@ -4,6 +4,7 @@
 
 #include <map>
 #include <memory>
+#include <vector>
 
 #include "coordinates.h"
 #include "point.h"
@@ -56,22 +57,46 @@ class pixel_minimap
     private:
         struct submap_cache;
 
+        // A single critter beacon to paint onto main_tex. Captured each frame so
+        // render() can tell whether the critter layer is identical to last frame
+        // (and thus whether main_tex can be reused without repainting).
+        struct beacon {
+            SDL_Rect rect;
+            SDL_Color color;
+            bool operator==( const beacon &rhs ) const {
+                return rect.x == rhs.rect.x && rect.y == rhs.rect.y &&
+                       rect.w == rhs.rect.w && rect.h == rhs.rect.h &&
+                       color.r == rhs.color.r && color.g == rhs.color.g &&
+                       color.b == rhs.color.b && color.a == rhs.color.a;
+            }
+            bool operator!=( const beacon &rhs ) const {
+                return !( *this == rhs );
+            }
+        };
+
         submap_cache &get_cache_at( const tripoint_abs_sm &abs_sm_pos );
 
         void set_screen_rect( const SDL_Rect &screen_rect );
 
         void draw_beacon( const SDL_Rect &rect, const SDL_Color &color );
 
-        void process_cache( const tripoint_bub_ms &center );
+        // Builds/refreshes the chunk caches for this frame and flushes pending
+        // updates. Transitively returns flush_cache_updates()'s result: true if
+        // any chunk texture was actually repainted.
+        bool process_cache( const tripoint_bub_ms &center );
 
-        void flush_cache_updates();
+        // Returns true if any chunk texture was actually repainted this frame.
+        bool flush_cache_updates();
         void update_cache_at( const tripoint_bub_sm &pos );
         void prepare_cache_for_updates( const tripoint_bub_ms &center );
         void clear_unused_cache();
 
-        void render( const tripoint_bub_ms &center );
+        void render( const tripoint_bub_ms &center, bool chunks_repainted );
         void render_cache( const tripoint_bub_ms &center );
-        void render_critters( const tripoint_bub_ms &center );
+        // Scan visible critters into a beacon list (no rendering). Also refreshes
+        // has_blinking_beacons_. The returned list is compared frame-to-frame to
+        // decide whether main_tex can be reused.
+        std::vector<beacon> collect_critter_beacons( const tripoint_bub_ms &center );
 
         std::unique_ptr<pixel_minimap_projector> create_projector( const SDL_Rect &max_screen_rect ) const;
 
@@ -101,6 +126,19 @@ class pixel_minimap
         std::map<tripoint_abs_sm, submap_cache> cache;
 
         bool has_blinking_beacons_ = false;
+
+        // State of the last main_tex paint, used to skip re-rendering when the
+        // minimap is visually unchanged. main_tex content depends only on the
+        // camera position, the chunk textures, and the critter beacon layer.
+        // The camera position must be compared at tile (ms) resolution, not
+        // submap resolution: chunk placement in render_cache and beacon
+        // positions both shift per tile, so a sub-submap move still changes the
+        // image. main_tex_valid_ is cleared whenever the GPU texture is
+        // dropped/rebuilt (reset(), set_screen_rect()).
+        bool main_tex_valid_ = false;
+        tripoint_abs_sm last_render_abs_sub;
+        tripoint_bub_ms last_render_center;
+        std::vector<beacon> last_beacons_;
 };
 
 #endif // CATA_SRC_PIXEL_MINIMAP_H
